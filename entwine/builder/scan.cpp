@@ -12,6 +12,8 @@
 
 #include <limits>
 
+#include <pdal/StageFactory.hpp>
+
 #include <entwine/builder/thread-pools.hpp>
 #include <entwine/types/reprojection.hpp>
 #include <entwine/types/srs.hpp>
@@ -24,12 +26,13 @@ namespace entwine
 
 namespace
 {
-    const arbiter::http::Headers range(([]()
+    arbiter::http::Headers rangeHeaders(int start, int end)
     {
         arbiter::http::Headers h;
-        h["Range"] = "bytes=0-16384";
+        h["Range"] = "bytes=" + std::to_string(start) + "-" +
+            std::to_string(end);
         return h;
-    })());
+    }
 }
 
 Scan::Scan(const Config config)
@@ -112,20 +115,75 @@ void Scan::add(FileInfo& f)
 
     if (m_in.trustHeaders() && m_arbiter.isHttpDerived(f.path()))
     {
-        m_pool->add([this, &f]()
+        if (pdal::StageFactory::inferReaderDriver(f.path()) == "readers.las")
         {
-            const auto data(m_arbiter.getBinary(f.path(), range));
+            m_pool->add([this, &f]()
+            {
+                pdal::LasHeader las;
 
-            const std::string ext(arbiter::Arbiter::getExtension(f.path()));
-            const std::string basename(
-                    arbiter::crypto::encodeAsHex(arbiter::crypto::sha256(
-                            arbiter::Arbiter::stripExtension(f.path()))) +
-                    (ext.size() ? "." + ext : ""));
+                const auto header = m_arbiter.get(
+                        f.path(),
+                        rangeHeaders(0, 375)); // Max header size.
 
-            m_tmp.put(basename, data);
-            add(f, m_tmp.fullPath(basename));
-            arbiter::fs::remove(m_tmp.fullPath(basename));
-        });
+                std::istringstream issHeader(header);
+                pdal::ILeStream ilsHeader(&issHeader);
+                las.peek(ilsHeader);
+
+                // This tmp file won't actually be used, but the LasReader
+                // needs a filestream to open during initialization.
+                const std::string ext(arbiter::Arbiter::getExtension(f.path()));
+                const std::string basename(
+                        arbiter::crypto::encodeAsHex(arbiter::crypto::sha256(
+                                arbiter::Arbiter::stripExtension(f.path()))) +
+                        (ext.size() ? "." + ext : ""));
+                m_tmp.put(basename, header);
+
+                if (las.vlrCount())
+                {
+                    const auto vlrData = m_arbiter.get(
+                            f.path(),
+                            rangeHeaders(las.vlrOffset(), las.pointOffset()));
+                    std::istringstream iss(vlrData);
+                    pdal::ILeStream ils(&iss);
+                    las.readVlrs(ils);
+                }
+
+                if (las.eVlrCount())
+                {
+                    const uint64_t fileSize = m_arbiter.getSize(f.path());
+                    const auto evlrData = m_arbiter.get(
+                            f.path(),
+                            rangeHeaders(las.eVlrOffset(), fileSize));
+                    std::istringstream iss(evlrData);
+                    pdal::ILeStream ils(&iss);
+                    las.readEvlrs(ils);
+                }
+
+                las.setSrs();
+
+                add(f, m_tmp.fullPath(basename), &las);
+                arbiter::fs::remove(m_tmp.fullPath(basename));
+            });
+        }
+        else
+        {
+            m_pool->add([this, &f]()
+            {
+                const auto data(m_arbiter.getBinary(
+                            f.path(),
+                            rangeHeaders(0, 16384)));
+
+                const std::string ext(arbiter::Arbiter::getExtension(f.path()));
+                const std::string basename(
+                        arbiter::crypto::encodeAsHex(arbiter::crypto::sha256(
+                                arbiter::Arbiter::stripExtension(f.path()))) +
+                        (ext.size() ? "." + ext : ""));
+
+                m_tmp.put(basename, data);
+                add(f, m_tmp.fullPath(basename));
+                arbiter::fs::remove(m_tmp.fullPath(basename));
+            });
+        }
     }
     else
     {
@@ -137,11 +195,18 @@ void Scan::add(FileInfo& f)
     }
 }
 
-void Scan::add(FileInfo& f, const std::string localPath)
+void Scan::add(
+        FileInfo& f,
+        const std::string localPath,
+        const pdal::LasHeader* lasHeader)
 {
     const Json::Value pipeline(m_in.pipeline(localPath));
 
-    auto preview(Executor::get().preview(pipeline, m_in.trustHeaders()));
+    auto preview = Executor::get().preview(
+            pipeline,
+            m_in.trustHeaders(),
+            lasHeader);
+
     if (!preview) return;
 
     f.set(*preview);

@@ -17,6 +17,7 @@
 #include <string>
 
 #include <pdal/SpatialReference.hpp>
+#include <pdal/io/LasHeader.hpp>
 
 #include <entwine/builder/config.hpp>
 #include <entwine/third/arbiter/arbiter.hpp>
@@ -46,7 +47,10 @@ public:
 
 private:
     void add(FileInfo& f);
-    void add(FileInfo& f, std::string localPath);
+    void add(
+            FileInfo& f,
+            std::string localPath,
+            const pdal::LasHeader* lasHeader = nullptr);
     Config aggregate();
 
     const Config m_in;

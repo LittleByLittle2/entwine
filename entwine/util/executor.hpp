@@ -17,6 +17,7 @@
 
 #include <pdal/Filter.hpp>
 #include <pdal/Reader.hpp>
+#include <pdal/io/LasReader.hpp>
 
 #include <entwine/types/bounds.hpp>
 #include <entwine/types/reprojection.hpp>
@@ -88,7 +89,8 @@ public:
 
     std::unique_ptr<ScanInfo> preview(
             Json::Value pipeline,
-            bool trustHeaders = true) const;
+            bool trustHeaders = true,
+            const pdal::LasHeader* lasHeader = nullptr) const;
 
     static std::unique_lock<std::mutex> getLock();
 

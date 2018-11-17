@@ -17,7 +17,6 @@
 #include <pdal/SpatialReference.hpp>
 #include <pdal/StageFactory.hpp>
 #include <pdal/io/BufferReader.hpp>
-#include <pdal/io/LasReader.hpp>
 
 #include <entwine/third/arbiter/arbiter.hpp>
 #include <entwine/types/schema.hpp>
@@ -94,7 +93,8 @@ private:
 
 std::unique_ptr<ScanInfo> Executor::preview(
         Json::Value pipeline,
-        const bool trustHeaders) const
+        const bool trustHeaders,
+        const pdal::LasHeader* lasHeader) const
 {
     if (!trustHeaders) return deepScan(pipeline);
     pipeline = ensureArray(pipeline);
@@ -112,6 +112,13 @@ std::unique_ptr<ScanInfo> Executor::preview(
         std::istringstream readStream(ensureArray(readerJson).toStyledString());
         pm.readPipeline(readStream);
         pdal::Stage* reader(pm.getStage());
+
+        if (lasHeader)
+        {
+            const auto las = dynamic_cast<pdal::LasReader*>(reader);
+            if (!las) throw std::runtime_error("Invalid LAS reader");
+            las->setHeader(*lasHeader);
+        }
 
         pdal::FixedPointTable table(0);
         reader->prepare(table);
@@ -134,6 +141,13 @@ std::unique_ptr<ScanInfo> Executor::preview(
         std::istringstream readStream(ensureArray(readerJson).toStyledString());
         pm.readPipeline(readStream);
         pdal::Stage* reader(pm.getStage());
+
+        if (lasHeader)
+        {
+            const auto las = dynamic_cast<pdal::LasReader*>(reader);
+            if (!las) throw std::runtime_error("Invalid LAS reader");
+            las->setHeader(*lasHeader);
+        }
 
         result = ScanInfo::create(*reader);
     }
